@@ -1,5 +1,7 @@
 # Testing SPDM over DOE on an Emulated NVME device with QEMU
 
+***Tested as of: [22/2/24]***
+
 This guide will walkthrough setting up a basic linux image, emulating an
 NVMe device (PCIe) and testing SPDM over DOE all using QEMU. With everything setup,
 we will also take a look at using the Kernel SPDM implementation (ongoing work)
@@ -12,7 +14,7 @@ We need:
 - Linux Kernel
 - Linux Userspace/FS
 - QEMU
-- SPDM-emu
+- SPDM-utils
 
 Notes: There is an in progress effort to add an SPDM requester support to Linux,
 it's at a stage where it can be used as a requester to authenticate a device.
@@ -32,7 +34,11 @@ $ git clone https://github.com/torvalds/linux.git
 $ git clone https://github.com/l1k/linux.git
 # We are using a fork of QEMU, but SPDM over DOE patches will be upstreamed soon
 $ git clone https://github.com/twilfredo/qemu.git
-$ git clone --recursive https://github.com/DMTF/spdm-emu.git
+# Pick one of the below tools
+# spdm-utils -> libspdm Rust based responder/requestor
+$ git clone --recursive https://github.com/westerndigitalcorporation/spdm-utils.git
+# spdm-emu -> libspdm C based responder/requestor
+$ git clone --recursive https://github.com/westerndigitalcorporation/spdm-utils.git
 ```
 
 ### Build Linux
@@ -126,7 +132,31 @@ $ ./create-image.sh --distribution bookworm --feature full --seek 32768
 ```
 this will take awhile to cook. Go for a coffee run.
 
-### Setting up SPDM-emu
+### Setting up an SPDM Responder
+
+There are two tools we can use to achieve this, `SPDM-utils` (Rust based SPDM utility) and `SPDM-emu`. Pick ***one*** of the below, as for this application they both perform similarly.
+
+#### Setting up SPDM-utils
+
+SPDM utils is Rust based utility for linux that provides an implementation of an
+SPDM responder & requester, it is based on `libspdm`. To learn more about how, `spdm-utils`
+work, please refer to it's README. The below is a summary on how to build it.
+
+```shell
+$ cd qemu-spdm/spdm-utils/
+# Build libspdm as a static library
+$ cd third-party/libspdm/
+$ mkdir build; cd build;
+$ cmake -DARCH=x64 -DTOOLCHAIN=GCC -DTARGET=Debug -DCRYPTO=openssl -DENABLE_BINARY_BUILD=1 -DCOMPILED_LIBCRYPTO_PATH=/usr/lib/ -DCOMPILED_LIBSSL_PATH=/usr/lib/ -DDISABLE_TESTS=1 CFLAGS="-DLIBSPDM_E
+      NABLE_CAPABILITY_CHUNK_CAP=1" ..
+
+$ make all
+$ cd ../../../
+# build spdm-utils using cargo
+$ cargo build
+```
+
+#### Setting up SPDM-emu
 
 The SPDM implementation depends on `spdm-emu` or known to QEMU as `OpenSPDM`.
 Let's build and set this up.
@@ -152,8 +182,10 @@ $ dd if=/dev/zero of=blknvme bs=1M count=2096 # 2GB NNMe Drive
 
 ## Running everything through QEMU
 
-We have everything setup. But QEMU depends on `spdm-emu` for it's SPDM
-implementation. So let's start that first
+We have everything setup. But QEMU depends on `spdm-emu` or `spdm-utils` for it's SPDM
+implementation. So let's start that first, pick the one you chose to use:
+
+### SPDM-emu
 
 ```shell
 $ cd qemu-spdm/spdm-emu/build/bin
@@ -164,6 +196,13 @@ spdm_responder_emu version 0.1
 trans - 0x2
 context_size - 0x2458
 Platform server listening on port 2323
+```
+
+### SPDM-utils
+
+```shell
+$ cd qemu-spdm/spdm-utils/
+$ ./target/debug/spdm_utils --qemu-server response
 ```
 
 Now to run QEMU, create a `run.sh` for convenience
@@ -198,11 +237,11 @@ echo "Starting QEMU..."
 To summarise, we are virtualizing a `q35` machine (this is the only `x86-64`
 machine type to support PCIe). The machine emulates an NVMe controller that
 points `blknvme` (file we made) for it's namespace storage. The `spdm=2323`
-option to the NVMe device tells us on which port to look for `spdm-emu-responder`.
-`spdm-emu` currently uses port `2323`.
+option to the NVMe device tells us on which port to look for `spdm-responder`.
+`spdm-emu` and `spdm-utils` both currently use port `2323`.
 
-If `spdm-emu` is not started prior to QEMU, QEMU will fail to start with an
-appropriate error.
+If an `spdm-responder` (`spdm-emu` or `spdm-utils`) is not started prior to QEMU,
+QEMU will fail to start with an appropriate error.
 
 Finally run:
 ```shell
